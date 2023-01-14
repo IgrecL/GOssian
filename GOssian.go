@@ -10,9 +10,8 @@ import (
 )
 
 func main() {
-	var img image.Image = importerImage("test2.jpg")
 	rayon := 2
-	println(img)
+	var img image.Image = importerImage("test.jpg")
 	genererMasque(rayon, 1.0)
 	conversionImage(img, rayon)
 	// flouGaussien(img, 3)
@@ -61,37 +60,41 @@ func genererMasque(rayon int, sigma float64) [][]float64 {
 	return nil
 }
 
-func flouGaussien(img image.RGBA, rayon int) {
-
+func vide(tab []float64) bool {
+	for i := 0; i < 3; i++ {
+		if tab[i] != 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func conversionImage(img image.Image, rayon int) {
 	largeur, hauteur := img.Bounds().Dx(), img.Bounds().Dy()
 
-	// Initialisation du tableau 3D avec un contour
+	// Initialisation et remplissage du tableau 3D avec un contour
 	new := make([][][]float64, largeur+2*rayon)
 	for k := range new {
 		new[k] = make([][]float64, hauteur+2*rayon)
 		for i := 0; i < len(new); i++ {
 			for j := 0; j < len(new[i]); j++ {
+
+				// Chaque case du tableau 2D contient un array de 3 pour stocker les couleurs
 				new[i][j] = make([]float64, 3)
+
+				// Si on se trouve après le contour, on récupère le RGB des pixels de img
+				if i >= rayon && j >= rayon {
+					r, g, b, _ := img.At(i-rayon, j-rayon).RGBA()
+					new[i][j][0] = float64(r)
+					new[i][j][1] = float64(g)
+					new[i][j][2] = float64(b)
+				}
+
 			}
 		}
 	}
 
-	// Remplissage du tableau 3D
-	for i := 0; i < largeur; i++ {
-		for j := 0; j < hauteur; j++ {
-			for k := 0; k < 3; k++ {
-				r, g, b, _ := img.At(i, j).RGBA()
-				new[i+rayon][j+rayon][0] = float64(r)
-				new[i+rayon][j+rayon][1] = float64(g)
-				new[i+rayon][j+rayon][2] = float64(b)
-			}
-		}
-	}
-
-	// On remplit le contour en appliquant l'image en miroir
+	// On remplit le contour en appliquant l'image en miroir de chaque côté du contour
 	for i := rayon; i < largeur+rayon; i++ {
 		for j := 0; j < rayon; j++ {
 			// Gauche et droite
@@ -100,6 +103,16 @@ func conversionImage(img image.Image, rayon int) {
 			// Haut et bas
 			new[j][i] = new[2*rayon-j][i]
 			new[rayon+largeur+j][i] = new[rayon+largeur-2-j][i]
+		}
+	}
+
+	// Pour remplir les coins on fait des rotations axiales centrées sur les coins en question
+	for i := 0; i < rayon; i++ {
+		for j := 0; j < rayon; j++ {
+			new[i][j] = new[2*rayon-i][2*rayon-j]                             // Coin en haut à gauche
+			new[hauteur+rayon+i][j] = new[hauteur-i][j]                       // Coin en bas  à gauche
+			new[i][largeur+rayon+j] = new[i][largeur-j]                       // Coin en haut à droite
+			new[hauteur+rayon+i][largeur+rayon+j] = new[hauteur-i][largeur-j] // Coin en bas  à droite
 		}
 	}
 
@@ -116,10 +129,6 @@ func conversionImage(img image.Image, rayon int) {
 
 }
 
-// func flouPixel(x int, y int, image image.Image) (res [5]int) { // res[0]=x, res[1]=y, res[2]=red, res[3]=green, res[4]=blue
+func flouGaussien(img image.RGBA, rayon int) {
 
-// 	res[0],res[1] := x, y
-
-// 	return res
-
-// }
+}
