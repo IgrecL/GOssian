@@ -11,7 +11,7 @@ import (
 
 func main() {
 	rayon := 2
-	var img image.Image = importerImage("test.jpg")
+	var img image.Image = importerImage("test2.jpg")
 	genererMasque(rayon, 1.0)
 	conversionImage(img, rayon)
 	// flouGaussien(img, 3)
@@ -97,12 +97,16 @@ func conversionImage(img image.Image, rayon int) {
 	// On remplit le contour en appliquant l'image en miroir de chaque côté du contour
 	for i := rayon; i < largeur+rayon; i++ {
 		for j := 0; j < rayon; j++ {
-			// Gauche et droite
+			// Haut et bas
 			new[i][j] = new[i][2*rayon-j]
 			new[i][rayon+hauteur+j] = new[i][rayon+hauteur-2-j]
-			// Haut et bas
-			new[j][i] = new[2*rayon-j][i]
-			new[rayon+largeur+j][i] = new[rayon+largeur-2-j][i]
+		}
+	}
+	for i := 0; i < rayon; i++ {
+		for j := rayon; j < hauteur+rayon; j++ {
+			// Gauche et droite
+			new[i][j] = new[2*rayon-i][j]
+			new[rayon+largeur+i][j] = new[rayon+largeur-2-i][j]
 		}
 	}
 
@@ -110,14 +114,14 @@ func conversionImage(img image.Image, rayon int) {
 	for i := 0; i < rayon; i++ {
 		for j := 0; j < rayon; j++ {
 			new[i][j] = new[2*rayon-i][2*rayon-j]                             // Coin en haut à gauche
-			new[hauteur+rayon+i][j] = new[hauteur-i][j]                       // Coin en bas  à gauche
-			new[i][largeur+rayon+j] = new[i][largeur-j]                       // Coin en haut à droite
-			new[hauteur+rayon+i][largeur+rayon+j] = new[hauteur-i][largeur-j] // Coin en bas  à droite
+			new[largeur+rayon+i][j] = new[largeur-i][j]                       // Coin en haut à droite
+			new[i][hauteur+rayon+j] = new[i][hauteur-j]                       // Coin en bas  à droite
+			new[largeur+rayon+i][hauteur+rayon+j] = new[largeur-i][hauteur-j] // Coin en bas  à droite
 		}
 	}
 
-	for i := range new {
-		for j := range new[i] {
+	for j := 0; j < hauteur+2*rayon; j++ {
+		for i := 0; i < largeur+2*rayon; i++ {
 			if new[i][j][0] == 0 {
 				fmt.Print("  0   ")
 			} else {
