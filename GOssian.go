@@ -1,8 +1,8 @@
 package main
 
 import (
-	"fmt"
 	"image"
+	"image/color"
 	"image/jpeg"
 	_ "image/jpeg"
 	"math"
@@ -10,12 +10,30 @@ import (
 )
 
 func main() {
-	rayon := 2
-	var img image.Image = importerImage("test2.jpg")
-	genererMasque(rayon, 1.0)
-	conversionImage(img, rayon)
-	// flouGaussien(img, 3)
+	rayon := 30
+	imgInput := importerImage("image.jpg")
+	masque := genererMasque(rayon, 1.0)
+	imgTab := conversionImage(imgInput, rayon)
 
+	largeur, hauteur := imgInput.Bounds().Dx(), imgInput.Bounds().Dy()
+
+	newImg := image.NewRGBA(image.Rect(0, 0, largeur, hauteur))
+
+	for x := rayon; x < largeur+rayon; x++ {
+		for y := rayon; y < hauteur+rayon; y++ {
+			pixel := flouGaussien(imgTab, masque, x, y)
+			newImg.Set(x-rayon, y-rayon, color.RGBA{pixel[0], pixel[1], pixel[2], 255})
+		}
+	}
+
+	out, err := os.Create("output.jpeg")
+	if err != nil {
+		panic(err)
+	}
+	jpeg.Encode(out, newImg, nil)
+	out.Close()
+
+	print(masque, imgTab)
 }
 
 func importerImage(chemin string) image.Image {
@@ -57,7 +75,7 @@ func genererMasque(rayon int, sigma float64) [][]float64 {
 		}
 	}
 
-	return nil
+	return masque
 }
 
 func vide(tab []float64) bool {
@@ -69,10 +87,10 @@ func vide(tab []float64) bool {
 	return true
 }
 
-func conversionImage(img image.Image, rayon int) {
+func conversionImage(img image.Image, rayon int) [][][]float64 {
 	largeur, hauteur := img.Bounds().Dx(), img.Bounds().Dy()
 
-	// Initialisation et remplissage du tableau 3D avec un contour
+	// Initialisation et remplissage du tableau 3D avec un contour vide
 	new := make([][][]float64, largeur+2*rayon)
 	for k := range new {
 		new[k] = make([][]float64, hauteur+2*rayon)
@@ -85,9 +103,9 @@ func conversionImage(img image.Image, rayon int) {
 				// Si on se trouve après le contour, on récupère le RGB des pixels de img
 				if i >= rayon && j >= rayon {
 					r, g, b, _ := img.At(i-rayon, j-rayon).RGBA()
-					new[i][j][0] = float64(r)
-					new[i][j][1] = float64(g)
-					new[i][j][2] = float64(b)
+					new[i][j][0] = float64(r) / 257
+					new[i][j][1] = float64(g) / 257
+					new[i][j][2] = float64(b) / 257
 				}
 
 			}
@@ -120,19 +138,42 @@ func conversionImage(img image.Image, rayon int) {
 		}
 	}
 
-	for j := 0; j < hauteur+2*rayon; j++ {
-		for i := 0; i < largeur+2*rayon; i++ {
-			if new[i][j][0] == 0 {
-				fmt.Print("  0   ")
-			} else {
-				fmt.Print(new[i][j][0], " ")
-			}
-		}
-		fmt.Print("\n\n\n")
-	}
+	// for j := 0; j < hauteur+2*rayon; j++ {
+	// 	for i := 0; i < largeur+2*rayon; i++ {
+	// 		if new[i][j][0] == 0 {
+	// 			fmt.Print("  0   ")
+	// 		} else {
+	// 			fmt.Print(new[i][j][0], " ")
+	// 		}
+	// 	}
+	// 	fmt.Print("\n\n\n")
+	// }
 
+	return new
 }
 
-func flouGaussien(img image.RGBA, rayon int) {
+func flouGaussien(image [][][]float64, masque [][]float64, x, y int) [3]uint8 {
+	var somme [3]float64
+	var denominateur float64
+	rayon := (len(masque) - 1) / 2
 
+	for i := range masque {
+		for j := range masque {
+			denominateur += masque[i][j]
+		}
+	}
+
+	for i := -rayon; i < rayon; i++ {
+		for j := -rayon; j < rayon; j++ {
+			for k := 0; k < 3; k++ {
+				somme[k] += masque[rayon+i][rayon+j] * image[x+i][y+j][k]
+			}
+		}
+	}
+
+	for k := 0; k < 3; k++ {
+		somme[k] /= denominateur
+	}
+
+	return [3]uint8{uint8(somme[0]), uint8(somme[1]), uint8(somme[2])}
 }
