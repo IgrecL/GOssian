@@ -7,7 +7,10 @@ import (
 	_ "image/jpeg"
 	"math"
 	"os"
+	"sync"
 )
+
+const MAX_GOROUTINES = 1000
 
 func main() {
 	rayon := 30
@@ -19,12 +22,42 @@ func main() {
 
 	newImg := image.NewRGBA(image.Rect(0, 0, largeur, hauteur))
 
+	inputChan := make(chan [2]int, 100)
+	outputChan := make(chan [5]int, 100)
+	wg := new(sync.WaitGroup)
+
+	// On ajoute les goroutines au waitgroup et on les exécute
+	for i := 0; i < MAX_GOROUTINES; i++ {
+		wg.Add(1)
+		go flouGaussien(imgTab, masque, inputChan, outputChan, wg)
+	}
+
+	serve := false
+	compteur := 1
+
 	for x := rayon; x < largeur+rayon; x++ {
 		for y := rayon; y < hauteur+rayon; y++ {
-			pixel := flouGaussien(imgTab, masque, x, y)
-			newImg.Set(x-rayon, y-rayon, color.RGBA{pixel[0], pixel[1], pixel[2], 255})
+			inputChan <- [2]int{x, y}
+			if serve {
+				o := <-outputChan
+				newImg.Set(int(o[0])-rayon, int(o[1])-rayon, color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+			}
+			if compteur == MAX_GOROUTINES {
+				serve = true
+			} else {
+				compteur++
+			}
 		}
 	}
+	
+	for k := 0; k < MAX_GOROUTINES; k++ {
+		o := <-outputChan
+		newImg.Set(int(o[0])-rayon, int(o[1])-rayon, color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+	}
+
+	close(inputChan)
+	wg.Wait()
+	close(outputChan)
 
 	out, err := os.Create("output.jpeg")
 	if err != nil {
@@ -152,28 +185,35 @@ func conversionImage(img image.Image, rayon int) [][][]float64 {
 	return new
 }
 
-func flouGaussien(image [][][]float64, masque [][]float64, x, y int) [3]uint8 {
-	var somme [3]float64
-	var denominateur float64
-	rayon := (len(masque) - 1) / 2
+func flouGaussien(image [][][]float64, masque [][]float64, inputChan chan [2]int, outputChan chan [5]int, wg  *sync.WaitGroup) {
+	defer wg.Done()
+	for input := range inputChan {
+		x, y := input[0], input[1]
 
-	for i := range masque {
-		for j := range masque {
-			denominateur += masque[i][j]
-		}
-	}
+		var somme [3]float64
+		var denominateur float64
+		rayon := (len(masque) - 1) / 2
 
-	for i := -rayon; i < rayon; i++ {
-		for j := -rayon; j < rayon; j++ {
-			for k := 0; k < 3; k++ {
-				somme[k] += masque[rayon+i][rayon+j] * image[x+i][y+j][k]
+		for i := range masque {
+			for j := range masque {
+				denominateur += masque[i][j]
 			}
 		}
-	}
 
-	for k := 0; k < 3; k++ {
-		somme[k] /= denominateur
-	}
+		for i := -rayon; i < rayon; i++ {
+			for j := -rayon; j < rayon; j++ {
+				for k := 0; k < 3; k++ {
+					somme[k] += masque[rayon+i][rayon+j] * image[x+i][y+j][k]
+				}
+			}
+		}
 
-	return [3]uint8{uint8(somme[0]), uint8(somme[1]), uint8(somme[2])}
+		for k := 0; k < 3; k++ {
+			somme[k] /= denominateur
+		}
+
+		output := [5]int{x, y, int(somme[0]), int(somme[1]), int(somme[2])}
+
+		outputChan <- output
+	}
 }
