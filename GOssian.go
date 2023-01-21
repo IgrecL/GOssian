@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
@@ -8,12 +9,13 @@ import (
 	"math"
 	"os"
 	"sync"
+	"time"
 )
 
-const MAX_GOROUTINES = 1000
+const MAX_GOROUTINES = 100
 
 func main() {
-	rayon := 30
+	rayon := 10
 	imgInput := importerImage("image.jpg")
 	masque := genererMasque(rayon, 1.0)
 	imgTab := conversionImage(imgInput, rayon)
@@ -21,6 +23,8 @@ func main() {
 	largeur, hauteur := imgInput.Bounds().Dx(), imgInput.Bounds().Dy()
 
 	newImg := image.NewRGBA(image.Rect(0, 0, largeur, hauteur))
+    
+    t0 := time.Now()
 
 	inputChan := make(chan [2]int, 100)
 	outputChan := make(chan [5]int, 100)
@@ -58,6 +62,9 @@ func main() {
 	close(inputChan)
 	wg.Wait()
 	close(outputChan)
+    
+    t1 := time.Now()
+	fmt.Println("Exécuter flou gaussien :", t1.Sub(t0))
 
 	out, err := os.Create("output.jpeg")
 	if err != nil {
@@ -65,11 +72,11 @@ func main() {
 	}
 	jpeg.Encode(out, newImg, nil)
 	out.Close()
-
-	print(masque, imgTab)
 }
 
 func importerImage(chemin string) image.Image {
+
+    t0 := time.Now()
 
 	// Importation de l'image
 	fichier, err := os.Open(chemin)
@@ -82,6 +89,9 @@ func importerImage(chemin string) image.Image {
 	if err != nil {
 		panic(err)
 	}
+
+	t1 := time.Now()
+	fmt.Println("Importation de l'image :", t1.Sub(t0))
 
 	return img
 }
@@ -122,6 +132,8 @@ func vide(tab []float64) bool {
 
 func conversionImage(img image.Image, rayon int) [][][]float64 {
 	largeur, hauteur := img.Bounds().Dx(), img.Bounds().Dy()
+	
+	t0 := time.Now()
 
 	// Initialisation et remplissage du tableau 3D avec un contour vide
 	new := make([][][]float64, largeur+2*rayon)
@@ -144,6 +156,9 @@ func conversionImage(img image.Image, rayon int) [][][]float64 {
 			}
 		}
 	}
+
+	t1 := time.Now()
+	fmt.Println("Remplissage du tableau :", t1.Sub(t0))
 
 	// On remplit le contour en appliquant l'image en miroir de chaque côté du contour
 	for i := rayon; i < largeur+rayon; i++ {
@@ -171,16 +186,8 @@ func conversionImage(img image.Image, rayon int) [][][]float64 {
 		}
 	}
 
-	// for j := 0; j < hauteur+2*rayon; j++ {
-	// 	for i := 0; i < largeur+2*rayon; i++ {
-	// 		if new[i][j][0] == 0 {
-	// 			fmt.Print("  0   ")
-	// 		} else {
-	// 			fmt.Print(new[i][j][0], " ")
-	// 		}
-	// 	}
-	// 	fmt.Print("\n\n\n")
-	// }
+	t2 := time.Now()
+	fmt.Println("Remplissage du contour :", t2.Sub(t1))
 
 	return new
 }
