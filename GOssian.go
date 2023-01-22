@@ -15,16 +15,22 @@ import (
 const MAX_GOROUTINES = 100
 
 func main() {
+	
 	rayon := 10
-	imgInput := importerImage("image.jpg")
-	masque := genererMasque(rayon, 1.0)
-	imgTab := conversionImage(imgInput, rayon)
+	t0 := time.Now()
+    
+	// Importation de l'image à traiter
+	imgInput := importerImage("test.jpg")
+    t1 := time.Now()
+	fmt.Println("Importation de l'image :", t1.Sub(t0))
+	
+	// Génération du masque pour le flou gaussien
+	masque := genererMasque(rayon, 5.0)
+    t2 := time.Now()
+	fmt.Println("Génération du masque :  ", t2.Sub(t1))
 
 	largeur, hauteur := imgInput.Bounds().Dx(), imgInput.Bounds().Dy()
-
 	newImg := image.NewRGBA(image.Rect(0, 0, largeur, hauteur))
-    
-    t0 := time.Now()
 
 	inputChan := make(chan [2]int, 100)
 	outputChan := make(chan [5]int, 100)
@@ -33,18 +39,18 @@ func main() {
 	// On ajoute les goroutines au waitgroup et on les exécute
 	for i := 0; i < MAX_GOROUTINES; i++ {
 		wg.Add(1)
-		go flouGaussien(imgTab, masque, inputChan, outputChan, wg)
+		go flouGaussien(imgInput, masque, inputChan, outputChan, wg)
 	}
-
+	
+	// On remplit inputChan avec les coordonnées de chaque pixel, et on traite l'output des goroutines dès que possible
 	serve := false
 	compteur := 1
-
-	for x := rayon; x < largeur+rayon; x++ {
-		for y := rayon; y < hauteur+rayon; y++ {
+	for x := 0; x < largeur; x++ {
+		for y := 0; y < hauteur; y++ {
 			inputChan <- [2]int{x, y}
 			if serve {
 				o := <-outputChan
-				newImg.Set(int(o[0])-rayon, int(o[1])-rayon, color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+				newImg.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
 			}
 			if compteur == MAX_GOROUTINES {
 				serve = true
@@ -54,18 +60,20 @@ func main() {
 		}
 	}
 	
+	// On traite les goroutines restantes
 	for k := 0; k < MAX_GOROUTINES; k++ {
 		o := <-outputChan
-		newImg.Set(int(o[0])-rayon, int(o[1])-rayon, color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+		newImg.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
 	}
 
 	close(inputChan)
 	wg.Wait()
 	close(outputChan)
     
-    t1 := time.Now()
-	fmt.Println("Exécuter flou gaussien :", t1.Sub(t0))
-
+    t3 := time.Now()
+	fmt.Println("Flou gaussien :         ", t3.Sub(t2))
+	
+	// Impression de l'image traitée
 	out, err := os.Create("output.jpeg")
 	if err != nil {
 		panic(err)
@@ -74,9 +82,8 @@ func main() {
 	out.Close()
 }
 
+// Importation et décodage de l'image
 func importerImage(chemin string) image.Image {
-
-    t0 := time.Now()
 
 	// Importation de l'image
 	fichier, err := os.Open(chemin)
@@ -90,9 +97,6 @@ func importerImage(chemin string) image.Image {
 		panic(err)
 	}
 
-	t1 := time.Now()
-	fmt.Println("Importation de l'image :", t1.Sub(t0))
-
 	return img
 }
 
@@ -103,6 +107,7 @@ func normpdf(x, y, sigma float64) float64 {
 	return 1 / (2 * math.Pi * sigma * sigma) * math.Pow(math.E, (numerateur/denominateur))
 }
 
+// Génération du masque utilisé pour réaliser le flou gaussien
 func genererMasque(rayon int, sigma float64) [][]float64 {
 
 	// Initialisation du masque
@@ -121,106 +126,38 @@ func genererMasque(rayon int, sigma float64) [][]float64 {
 	return masque
 }
 
-func vide(tab []float64) bool {
-	for i := 0; i < 3; i++ {
-		if tab[i] != 0 {
-			return false
-		}
-	}
-	return true
-}
-
-func conversionImage(img image.Image, rayon int) [][][]float64 {
-	largeur, hauteur := img.Bounds().Dx(), img.Bounds().Dy()
-	
-	t0 := time.Now()
-
-	// Initialisation et remplissage du tableau 3D avec un contour vide
-	new := make([][][]float64, largeur+2*rayon)
-	for k := range new {
-		new[k] = make([][]float64, hauteur+2*rayon)
-		for i := 0; i < len(new); i++ {
-			for j := 0; j < len(new[i]); j++ {
-
-				// Chaque case du tableau 2D contient un array de 3 pour stocker les couleurs
-				new[i][j] = make([]float64, 3)
-
-				// Si on se trouve après le contour, on récupère le RGB des pixels de img
-				if i >= rayon && j >= rayon {
-					r, g, b, _ := img.At(i-rayon, j-rayon).RGBA()
-					new[i][j][0] = float64(r) / 257
-					new[i][j][1] = float64(g) / 257
-					new[i][j][2] = float64(b) / 257
-				}
-
-			}
-		}
-	}
-
-	t1 := time.Now()
-	fmt.Println("Remplissage du tableau :", t1.Sub(t0))
-
-	// On remplit le contour en appliquant l'image en miroir de chaque côté du contour
-	for i := rayon; i < largeur+rayon; i++ {
-		for j := 0; j < rayon; j++ {
-			// Haut et bas
-			new[i][j] = new[i][2*rayon-j]
-			new[i][rayon+hauteur+j] = new[i][rayon+hauteur-2-j]
-		}
-	}
-	for i := 0; i < rayon; i++ {
-		for j := rayon; j < hauteur+rayon; j++ {
-			// Gauche et droite
-			new[i][j] = new[2*rayon-i][j]
-			new[rayon+largeur+i][j] = new[rayon+largeur-2-i][j]
-		}
-	}
-
-	// Pour remplir les coins on fait des rotations axiales centrées sur les coins en question
-	for i := 0; i < rayon; i++ {
-		for j := 0; j < rayon; j++ {
-			new[i][j] = new[2*rayon-i][2*rayon-j]                             // Coin en haut à gauche
-			new[largeur+rayon+i][j] = new[largeur-i][j]                       // Coin en haut à droite
-			new[i][hauteur+rayon+j] = new[i][hauteur-j]                       // Coin en bas  à droite
-			new[largeur+rayon+i][hauteur+rayon+j] = new[largeur-i][hauteur-j] // Coin en bas  à droite
-		}
-	}
-
-	t2 := time.Now()
-	fmt.Println("Remplissage du contour :", t2.Sub(t1))
-
-	return new
-}
-
-func flouGaussien(image [][][]float64, masque [][]float64, inputChan chan [2]int, outputChan chan [5]int, wg  *sync.WaitGroup) {
+// Application du flou gaussien pour un pixel de coordonnées donnée
+func flouGaussien(image image.Image, masque [][]float64, inputChan chan [2]int, outputChan chan [5]int, wg  *sync.WaitGroup) {
 	defer wg.Done()
 	for input := range inputChan {
+
 		x, y := input[0], input[1]
-
-		var somme [3]float64
+		var rouge, vert, bleu float64
 		var denominateur float64
+		largeur, hauteur := image.Bounds().Dx(), image.Bounds().Dy()
 		rayon := (len(masque) - 1) / 2
-
-		for i := range masque {
-			for j := range masque {
-				denominateur += masque[i][j]
-			}
-		}
-
-		for i := -rayon; i < rayon; i++ {
-			for j := -rayon; j < rayon; j++ {
-				for k := 0; k < 3; k++ {
-					somme[k] += masque[rayon+i][rayon+j] * image[x+i][y+j][k]
+        
+		// Convolution 2D de l'image et du masque centrée en (x, y)
+		for i := -rayon; i <= rayon; i++ {
+			for j := -rayon; j <= rayon; j++ {
+				if x+i >= 0 && x+i < largeur && y+j >= 0 && y+j < hauteur {
+					r, g, b, _ := image.At(x+i, y+j).RGBA()
+					rouge += masque[rayon+i][rayon+j] * (float64(r) / 257) 
+					vert += masque[rayon+i][rayon+j] * (float64(g) / 257)
+					bleu += masque[rayon+i][rayon+j] * (float64(b) / 257)
+				    denominateur += masque[rayon+i][rayon+j]
 				}
-			}
+		    }
+	    }
+		
+		// On divise les trois couleurs par le dénominateur pour obtenir la moyenne pondérée par la gaussienne
+		if denominateur != 0 {
+			rouge /= denominateur
+			vert /= denominateur
+			bleu /= denominateur
 		}
 
-		for k := 0; k < 3; k++ {
-			somme[k] /= denominateur
-		}
-
-		output := [5]int{x, y, int(somme[0]), int(somme[1]), int(somme[2])}
-
+		output := [5]int{x, y, int(rouge), int(vert), int(bleu)}
 		outputChan <- output
 	}
 }
