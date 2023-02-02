@@ -47,13 +47,16 @@ func main() {
 func processing(socket net.Conn) {
 	
 	// Récupération de l'image et des paramètres de traitement
-	imgInput, radius, sigma, quali := handleRequest(socket)
+	var imgInput image.Image
+	radius, sigma, quali := handleRequest(socket, &imgInput)
 	t0 := time.Now()
 
 	// Génération du masque pour le flou gaussien
 	mask := generateMask(radius, sigma)
 	t1 := time.Now()
 	fmt.Println("Génération du masque :  ", t1.Sub(t0))
+	
+	fmt.Println(imgInput)
 
 	width, height := imgInput.Bounds().Dx(), imgInput.Bounds().Dy()
 	newImg := image.NewRGBA(image.Rect(0, 0, width, height))
@@ -108,7 +111,7 @@ func processing(socket net.Conn) {
 }
 
 // Récupération de l'image et des paramètres de traitement
-func handleRequest(socket net.Conn) (image.Image, int, float64, int) {
+func handleRequest(socket net.Conn, imgInput *image.Image) (int, float64, int) {
 
 	// Connexion au socket
 	fmt.Println("Connexion au client :    " + socket.LocalAddr().String())
@@ -141,16 +144,17 @@ func handleRequest(socket net.Conn) (image.Image, int, float64, int) {
 	imageByte := make([]byte, int(imageSize))
 	_, err = socket.Read(imageByte)
 	check(err)
+	time.Sleep(time.Millisecond * 100)
 	imageReader := bytes.NewReader(imageByte)
 	t1 := time.Now()
 
 	// On décode l'image en image.Image
-	imgInput, err := jpeg.Decode(imageReader)
+	*imgInput, err = jpeg.Decode(imageReader)
 	check(err)
 	t2 := time.Now()
 	fmt.Println("Décodage de l'image :   ", t2.Sub(t1))
 
-	return imgInput, radius, sigma, quali
+	return radius, sigma, quali
 }
 
 // Envoie l'image traitée au client
@@ -168,6 +172,7 @@ func sendImage(socket net.Conn, newImg *image.RGBA, quali int) {
 	fileInfo, err := os.Stat(path)
 	check(err)
 	fileSize := fileInfo.Size()
+	fmt.Println("Image envoyée :         ", fileSize, "octets")
 
 	// On envoie la taille de l'image au client
 	sizeBuf := new(bytes.Buffer)
@@ -179,9 +184,9 @@ func sendImage(socket net.Conn, newImg *image.RGBA, quali int) {
 	// On envoie le contenu de output.jpeg dans le socket
 	sent, err := os.Open(path)
 	check(err)
-	defer sent.Close()
 	_, err = io.Copy(socket, sent)
 	check(err)
+	sent.Close()
 
 	t1 := time.Now()
 	fmt.Println("Envoi de l'image :      ", t1.Sub(t0))

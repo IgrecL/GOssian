@@ -32,10 +32,8 @@ func main() {
 	path = path[:len(path)-1]
 
 	// On envoie 0 si le socket sert à traiter une image, et 1 s'il sert à fermer le serveur
-	var t int
-	if path != "exit" {
-		t = 0
-	} else {
+	t := 0
+	if path == "exit" {
 		t = 1
 	}
 	typeBuf := new(bytes.Buffer)
@@ -65,11 +63,6 @@ func main() {
 	_, err = socket.Write([]byte(parameters))
 	check(err)
 
-	// On ouvre l'image au chemin indiqué
-	file, err := os.Open(path)
-	check(err)
-	defer file.Close()
-
 	// On calcule la taille de l'image et on l'envoie (en octets)
 	fileInfo, err := os.Stat(path)
 	check(err)
@@ -80,10 +73,15 @@ func main() {
 	_, err = socket.Write(sizeBuf.Bytes())
 	check(err)
 
+	// On ouvre l'image au chemin indiqué
+	file, err := os.Open(path)
+	check(err)
+
 	// On envoie l'image
 	size, err := io.Copy(socket, file)
 	check(err)
 	fmt.Println("Image envoyée :", size, "octets")
+	file.Close()
 
 	/* Le serveur applique le flou gaussien */
 
