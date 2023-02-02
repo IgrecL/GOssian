@@ -1,14 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/binary"
+	"encoding/base64"
 	"fmt"
 	"image"
 	"image/color"
 	"image/jpeg"
-	_ "image/jpeg"
-	"io"
+	"io/ioutil"
 	"math"
 	"net"
 	"os"
@@ -20,58 +21,46 @@ import (
 
 const MAX_GOROUTINES = 100
 
+// More concise error handling
 func check(err error) {
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
 }
 
 func main() {
 	listen, err := net.Listen("tcp", "localhost:8000")
-	if err != nil {
-		fmt.Print(err)
-		os.Exit(1)
-	}
+	check(err)
 	defer listen.Close()
 	for {
 		socket, err := listen.Accept()
-		if err != nil {
-			fmt.Print(err)
-			os.Exit(1)
-		}
-		go processing(socket)
+		check(err)
+		go process(socket)
 	}
 }
 
-func processing(socket net.Conn) {
+func process(socket net.Conn) {
 	
-	// Récupération de l'image et des paramètres de traitement
-	var imgInput image.Image
-	radius, sigma, quali := handleRequest(socket, &imgInput)
+	// Receiving image and processing parameters
+	var inputImage image.Image
+	radius, sigma, quali := handleRequest(socket, &inputImage)
 	t0 := time.Now()
 
-	// Génération du masque pour le flou gaussien
+	// Generating the variables given to the goroutines
 	mask := generateMask(radius, sigma)
-	t1 := time.Now()
-	fmt.Println("Génération du masque :  ", t1.Sub(t0))
-	
-	fmt.Println(imgInput)
+	width, height := inputImage.Bounds().Dx(), inputImage.Bounds().Dy()
+	processedImage := image.NewRGBA(image.Rect(0, 0, width, height))
 
-	width, height := imgInput.Bounds().Dx(), imgInput.Bounds().Dy()
-	newImg := image.NewRGBA(image.Rect(0, 0, width, height))
-
+	// Creating and syncing the goroutines 
+	wg := new(sync.WaitGroup)
 	inputChan := make(chan [2]int, MAX_GOROUTINES)
 	outputChan := make(chan [5]int, MAX_GOROUTINES)
-	wg := new(sync.WaitGroup)
-
-	// On ajoute les goroutines au waitgroup et on les exécute
 	for i := 0; i < MAX_GOROUTINES; i++ {
 		wg.Add(1)
-		go gaussianBlur(imgInput, mask, inputChan, outputChan, wg)
+		go gaussianBlur(inputImage, mask, inputChan, outputChan, wg)
 	}
-
-	// On remplit inputChan avec les coordonnées de chaque pixel, et on traite l'output des goroutines dès que possible
+	
+	// Filling inputChan with the coordinates of each pixel and processing the goroutines output as soon as possible
 	serve := false
 	counter := 1
 	for x := 0; x < width; x++ {
@@ -79,7 +68,7 @@ func processing(socket net.Conn) {
 			inputChan <- [2]int{x, y}
 			if serve {
 				o := <-outputChan
-				newImg.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+				processedImage.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
 			}
 			if counter == MAX_GOROUTINES {
 				serve = true
@@ -89,117 +78,93 @@ func processing(socket net.Conn) {
 		}
 	}
 
-	// On traite les goroutines restantes et on ferme les channels
+	// Processing the last goroutines
 	for k := 0; k < MAX_GOROUTINES; k++ {
 		o := <-outputChan
-		newImg.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
+		processedImage.Set(int(o[0]), int(o[1]), color.RGBA{uint8(o[2]), uint8(o[3]), uint8(o[4]), 255})
 	}
 	close(inputChan)
 	wg.Wait()
 	close(outputChan)
+	fmt.Println(">> Gaussian blur:  ", time.Now().Sub(t0))
 
-	t2 := time.Now()
-	fmt.Println("Flou gaussien :         ", t2.Sub(t1))
-
-	// On envoie le résultat au client
-	sendImage(socket, newImg, quali)
-
-	// Fermeture du socket
-	socket.Close()
-	fmt.Println("Déconnexion du client :  " + socket.LocalAddr().String())
+	// Sending back the processed image
+	sendImage(socket, processedImage, quali)
+	fmt.Println("Deconnecting from client", socket.LocalAddr().String())
 	fmt.Println()
+	socket.Close()
 }
 
-// Récupération de l'image et des paramètres de traitement
-func handleRequest(socket net.Conn, imgInput *image.Image) (int, float64, int) {
-
-	// Connexion au socket
-	fmt.Println("Connexion au client :    " + socket.LocalAddr().String())
-
-	// On reçoit le type de message (0 : image à traiter, 1 : fermeture du serveur)
+// Receiving the image and the processing parameters
+func handleRequest(socket net.Conn, inputImage *image.Image) (int, float64, int) {
+	fmt.Println("Connecting to client", socket.LocalAddr().String())
+	
+	// Receiving message type (0: image to process, 1: server shutdown)
 	var t int32
 	err := binary.Read(socket, binary.LittleEndian, &t)
 	check(err)
 	if t == 1 {
-		fmt.Println("Fermeture du serveur")
+		fmt.Println("Server shutdown")
 		os.Exit(1)
 	}
-
-	// On reçoit les paramètres du traitement
+	
+	// Receiving processing parameters
 	paramBytes := make([]byte, 256)
 	_, err = socket.Read(paramBytes)
 	check(err)
+	t0 := time.Now()
 	param := strings.Split(string(paramBytes), ":")
 	radius, _ := strconv.Atoi(param[0])
 	sigma, _ := strconv.ParseFloat(param[1], 8)
 	quali, _ := strconv.Atoi(param[2])
-
-	// On reçoit la taille de l'image à traiter (en octets)
-	var imageSize int32
-	err = binary.Read(socket, binary.LittleEndian, &imageSize)
+	
+	// Decoding the image received as a base64 string
+	temp, err := bufio.NewReader(socket).ReadString('\n')
 	check(err)
-	fmt.Println("Image reçue :           ", imageSize, "octets")
-
-	// On lit l'output du socket et on le stocke dans un buffer qu'on décode
-	imageByte := make([]byte, int(imageSize))
-	_, err = socket.Read(imageByte)
+	byteImage, err := base64.StdEncoding.DecodeString(temp)
 	check(err)
-	time.Sleep(time.Millisecond * 100)
-	imageReader := bytes.NewReader(imageByte)
-	t1 := time.Now()
-
-	// On décode l'image en image.Image
-	*imgInput, err = jpeg.Decode(imageReader)
+	*inputImage, err = jpeg.Decode(bytes.NewReader(byteImage))
 	check(err)
-	t2 := time.Now()
-	fmt.Println("Décodage de l'image :   ", t2.Sub(t1))
 
+	fmt.Println(">> Receiving image:", time.Now().Sub(t0))
 	return radius, sigma, quali
 }
 
-// Envoie l'image traitée au client
-func sendImage(socket net.Conn, newImg *image.RGBA, quali int) {
+// Sending the processed image back to the client
+func sendImage(socket net.Conn, processedImage *image.RGBA, quali int) {
 	t0 := time.Now()
 
-	// Impression de l'image traitée
-	path := time.Now().String() + " " + socket.LocalAddr().String() + ".jpeg"
-	out, err := os.Create(path)
+	path := time.Now().String() + " [" + socket.LocalAddr().String() + "].jpeg"
+	file, err := os.Create(path)
 	check(err)
-	jpeg.Encode(out, newImg, &jpeg.Options{Quality: quali})
-	out.Close()
+	jpeg.Encode(file, processedImage, &jpeg.Options{Quality: quali})
+	file.Close()
 
-	// On détermine la taille de l'image (en octets)
-	fileInfo, err := os.Stat(path)
-	check(err)
-	fileSize := fileInfo.Size()
-	fmt.Println("Image envoyée :         ", fileSize, "octets")
-
-	// On envoie la taille de l'image au client
-	sizeBuf := new(bytes.Buffer)
-	err = binary.Write(sizeBuf, binary.LittleEndian, int32(fileSize))
-	check(err)
-	_, err = socket.Write(sizeBuf.Bytes())
-	check(err)
-
-	// On envoie le contenu de output.jpeg dans le socket
-	sent, err := os.Open(path)
-	check(err)
-	_, err = io.Copy(socket, sent)
-	check(err)
-	sent.Close()
-
+	fmt.Fprintf(socket, encodeImage(path)+"\n")
+	
 	t1 := time.Now()
-	fmt.Println("Envoi de l'image :      ", t1.Sub(t0))
+	fmt.Println(">> Sending image:  ", t1.Sub(t0))
 }
 
-// Renvoie la valeur de loi normale à deux variables (x, y)
+// Loading image from file and encoding it as a base64 string
+func encodeImage(imgPath string) string {
+	f, err := os.Open(imgPath)
+	check(err)
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	content, err := ioutil.ReadAll(reader)
+	check(err)
+	return base64.StdEncoding.EncodeToString(content)
+}
+
+// Returns the value of the normal distribution at (x, y)
 func normpdf(x, y, sigma float64) float64 {
 	num := -(x*x + y*y)
 	denom := 2 * sigma * sigma
 	return 1 / (2 * math.Pi * sigma * sigma) * math.Pow(math.E, (num/denom))
 }
 
-// Génération du masque utilisé pour réaliser le flou gaussien
+// Generating the mask used to do the Gaussian blur
 func generateMask(radius int, sigma float64) [][]float64 {
 	mask := make([][]float64, 2*radius+1)
 	for i := range mask {
@@ -213,7 +178,7 @@ func generateMask(radius int, sigma float64) [][]float64 {
 	return mask
 }
 
-// Application du flou gaussien pour un pixel de coordonnées donnée
+// Applying the Gaussian blur for a pixel of given coordinates (goroutine)
 func gaussianBlur(image image.Image, mask [][]float64, inputChan chan [2]int, outputChan chan [5]int, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for input := range inputChan {
@@ -223,8 +188,8 @@ func gaussianBlur(image image.Image, mask [][]float64, inputChan chan [2]int, ou
 		var denom float64
 		width, height := image.Bounds().Dx(), image.Bounds().Dy()
 		radius := (len(mask) - 1) / 2
-
-		// Convolution 2D de l'image et du masque centrée en (x, y)
+		
+		// 2D convolution of the image and the mask centered on (x, y)
 		for i := -radius; i <= radius; i++ {
 			for j := -radius; j <= radius; j++ {
 				if x+i >= 0 && x+i < width && y+j >= 0 && y+j < height {
@@ -237,7 +202,7 @@ func gaussianBlur(image image.Image, mask [][]float64, inputChan chan [2]int, ou
 			}
 		}
 
-		// On divise les trois couleurs par le dénominateur pour obtenir la moyenne pondérée par la gaussienne
+		// Dividing by denom to get the weigthed mean
 		if denom != 0 {
 			red /= denom
 			green /= denom
@@ -248,3 +213,4 @@ func gaussianBlur(image image.Image, mask [][]float64, inputChan chan [2]int, ou
 		outputChan <- output
 	}
 }
+

@@ -3,35 +3,35 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"image/jpeg"
-	_ "image/jpeg"
-	"io"
+	"io/ioutil"
 	"net"
 	"os"
+	"strconv"
+	"time"
 )
 
-// Gestion des erreurs
+// More concise error handling
 func check(err error) {
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
 }
 
 func main() {
-	// Connexion au serveur
 	socket, err := net.Dial("tcp", "localhost:8000")
 	check(err)
 
-	// L'utilisateur doit écrire le chemin vers l'image qu'il veut faire traiter, ou "exit" pour fermer le serveur
+	// The user has to write the path to the file, or "exit" to close the server
 	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Écrivez le chemin vers l'image à traiter : ")
+	fmt.Print("Please write the path to your image:\n>> ")
 	path, _ := reader.ReadString('\n')
 	path = path[:len(path)-1]
-
-	// On envoie 0 si le socket sert à traiter une image, et 1 s'il sert à fermer le serveur
+	
+	// Sending message type (0: image to process, 1: server shutdown)
 	t := 0
 	if path == "exit" {
 		t = 1
@@ -41,66 +41,75 @@ func main() {
 	check(err)
 	_, err = socket.Write(typeBuf.Bytes())
 	check(err)
-
-	// Si on a envoyé la commande de fermeture du serveur, on s'arrête ici
+	
+	// If the 'server shutdown' command is sent, stopping the program here
 	if t == 1 {
 		os.Exit(1)
 	}
+	
+	// The user has to give 3 processing parameters: mask radius, Gaussian blur intensity, image compression
+	var radius, intensity, compression string
+	fmt.Print("Mask radius? (blur precision) [int]\n>> ")
+	for {
+		radius, _ = reader.ReadString('\n')
+		radius = radius[:len(radius)-1]
+		_, err = strconv.Atoi(radius)
+		if err == nil {
+			break
+		} else {
+			fmt.Print("Please give an integer!\n>> ")
+		}
+	}
+	fmt.Print("Gaussian blur intensity? (standard deviation for the normal distribution) [float]\n>> ")
+	for {
+		intensity, _ = reader.ReadString('\n')
+		intensity = intensity[:len(intensity)-1]
+		_, err = strconv.ParseFloat(intensity, 8)
+		if err == nil {
+			break
+		} else {
+			fmt.Print("Please give a float!\n>> ")
+		}
+	}
+	fmt.Print("Jpeg compression? (in percents) [int]\n>> ")
+	for {
+		compression, _ = reader.ReadString('\n')
+		compression = compression[:len(compression)-1]
+		_, err = strconv.Atoi(compression)
+		if err == nil {
+			break
+		} else {
+			fmt.Print("Please give an integer!\n>> ")
+		}
+	}
 
-	// L'utilisateur doit entrer les paramètres de traitement : rayon du masque, puissance du flou gaussien, compression de l'image
-	fmt.Println("Rayon du masque à appliquer ? (précision du flou) [int]")
-	radius, _ := reader.ReadString('\n')
-	radius = radius[:len(radius)-1]
-	fmt.Println("Puissance du flou gaussien ? (écart type de la loi normale) [float]")
-	power, _ := reader.ReadString('\n')
-	power = power[:len(power)-1]
-	fmt.Println("Compression du jpeg ? (en pourcents) [int]")
-	compression, _ := reader.ReadString('\n')
-	compression = compression[:len(compression)-1]
-
-	// On envoie les paramètres du traitement
-	parameters := radius + ":" + power + ":" + compression + ":"
+	// Sending the parameters and the image to process
+	parameters := radius + ":" + intensity + ":" + compression + ":"
 	_, err = socket.Write([]byte(parameters))
 	check(err)
+	fmt.Fprintf(socket, encodeImage(path)+"\n")
 
-	// On calcule la taille de l'image et on l'envoie (en octets)
-	fileInfo, err := os.Stat(path)
+	// Receiving back the image once processed
+	t0 := time.Now()
+	temp, err := bufio.NewReader(socket).ReadString('\n')
 	check(err)
-	fileSize := fileInfo.Size()
-	sizeBuf := new(bytes.Buffer)
-	err = binary.Write(sizeBuf, binary.LittleEndian, int32(fileSize))
+	byteImage, err := base64.StdEncoding.DecodeString(temp)
 	check(err)
-	_, err = socket.Write(sizeBuf.Bytes())
+	imgReceived, err := jpeg.Decode(bytes.NewReader(byteImage))
 	check(err)
+	fmt.Println("Finished after", time.Now().Sub(t0))
+	file, err := os.Create(time.Now().String())
+	check(err)
+	jpeg.Encode(file, imgReceived, nil)
+}
 
-	// On ouvre l'image au chemin indiqué
-	file, err := os.Open(path)
+// Loading image from file and encoding it as a base64 string
+func encodeImage(imgPath string) string {
+	f, err := os.Open(imgPath)
 	check(err)
-
-	// On envoie l'image
-	size, err := io.Copy(socket, file)
+	defer f.Close()
+	reader := bufio.NewReader(f)
+	content, err := ioutil.ReadAll(reader)
 	check(err)
-	fmt.Println("Image envoyée :", size, "octets")
-	file.Close()
-
-	/* Le serveur applique le flou gaussien */
-
-	// On reçoit la taille de l'image traitée (en octets)
-	var imageSize int32
-	err = binary.Read(socket, binary.LittleEndian, &imageSize)
-	check(err)
-	fmt.Println("Image reçue   :", imageSize, "octets")
-
-	// On reçoit l'image
-	imageByte := make([]byte, imageSize)
-	_, err = socket.Read(imageByte)
-	check(err)
-
-	// On encode l'image reçue et on crée le fichier d'output
-	imageReader := bytes.NewReader(imageByte)
-	imgReceived, err := jpeg.Decode(imageReader)
-	check(err)
-	out, err := os.Create("output.jpeg")
-	check(err)
-	jpeg.Encode(out, imgReceived, nil)
+	return base64.StdEncoding.EncodeToString(content)
 }
