@@ -202,7 +202,7 @@ func gaussianBlur(image image.Image, mask [][]float64, inputChan chan [2]int, ou
 			}
 		}
 
-		// Dividing by denom to get the weigthed mean
+		// Dividing by denom to get the weighted mean
 		if denom != 0 {
 			red /= denom
 			green /= denom
