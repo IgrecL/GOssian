@@ -1,6 +1,10 @@
 # GOssian
 
-TCP client/server session where clients can send an image and receive a blurred version thanks to a multi-threaded implementation of Gaussian blur in Golang.
+TCP client/server session where clients can send an image and receive a blurred version thanks to a fast multi-threaded implementation of Gaussian blur in Golang.
+
+<p align="center">
+  <img src="https://github.com/IgrecL/GOssian/assets/99618877/8a05c799-7e5d-4bdc-b317-432f614514d0" alt="Gaussian" width="80%">
+</p>
 
 ## How to use
 
